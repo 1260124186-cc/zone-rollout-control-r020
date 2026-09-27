@@ -29,11 +29,7 @@ func (s *Service) Evaluate(
 	now := s.clock.Now().UTC()
 	requestIndex := planID + "\x00" + input.RequestKey
 	var result domain.RolloutAssessment
-	var plan domain.RolloutPlan
-	var revision domain.ZoneRevision
-	var probes []domain.Probe
-	replayed := false
-	err := s.store.Read(ctx, func(state *domain.State) error {
+	err := s.store.Write(ctx, func(state *domain.State) error {
 		current, ok := state.Plans[planID]
 		if !ok {
 			return domain.NotFound("plan", planID)
@@ -52,7 +48,6 @@ func (s *Service) Evaluate(
 				})
 			}
 			result = existing
-			replayed = true
 			return nil
 		}
 		if current.LatestRevisionID == "" {
@@ -60,15 +55,13 @@ func (s *Service) Evaluate(
 				"plan_id": planID,
 			})
 		}
-		foundRevision, ok := state.Revisions[current.LatestRevisionID]
+		revision, ok := state.Revisions[current.LatestRevisionID]
 		if !ok {
 			return domain.NewError(domain.CodeStorageFailure, "plan references a missing revision", map[string]any{
 				"revision_id": current.LatestRevisionID,
 			})
 		}
-		plan = current
-		revision = foundRevision
-		probes = make([]domain.Probe, 0)
+		probes := make([]domain.Probe, 0)
 		for _, probe := range state.Probes {
 			if probe.PlanID == planID {
 				probes = append(probes, probe)
@@ -79,19 +72,13 @@ func (s *Service) Evaluate(
 				"plan_id": planID,
 			})
 		}
-		return nil
-	})
-	if err != nil || replayed {
-		return result, err
-	}
-	result = domain.BuildAssessment(s.ids.New("asm"), plan, revision, probes, now)
-	result.RequestKey = input.RequestKey
-	err = s.store.Write(ctx, func(state *domain.State) error {
+		result = domain.BuildAssessment(s.ids.New("asm"), current, revision, probes, now)
+		result.RequestKey = input.RequestKey
 		state.Assessments[result.ID] = result
 		state.AssessmentRequestKeys[requestIndex] = result.ID
-		plan.LatestAssessmentID = result.ID
-		plan.Version++
-		state.Plans[planID] = plan
+		current.LatestAssessmentID = result.ID
+		current.Version++
+		state.Plans[planID] = current
 		store.AddAudit(state, s.ids, "assessment", result.ID, "completed", now, map[string]any{
 			"plan_id": planID,
 			"verdict": result.Verdict,
