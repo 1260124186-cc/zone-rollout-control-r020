@@ -29,19 +29,15 @@ func (s *Service) Evaluate(
 	now := s.clock.Now().UTC()
 	requestIndex := planID + "\x00" + input.RequestKey
 	var result domain.RolloutAssessment
-	var plan domain.RolloutPlan
-	var revision domain.ZoneRevision
-	var probes []domain.Probe
-	replayed := false
-	err := s.store.Read(ctx, func(state *domain.State) error {
-		current, ok := state.Plans[planID]
+	err := s.store.Write(ctx, func(state *domain.State) error {
+		plan, ok := state.Plans[planID]
 		if !ok {
 			return domain.NotFound("plan", planID)
 		}
-		if current.State == domain.PlanDraft {
+		if plan.State == domain.PlanDraft {
 			return domain.InvalidState("plan must be active or completed for assessment", map[string]any{
 				"plan_id": planID,
-				"state":   current.State,
+				"state":   plan.State,
 			})
 		}
 		if existingID, exists := state.AssessmentRequestKeys[requestIndex]; exists {
@@ -52,23 +48,20 @@ func (s *Service) Evaluate(
 				})
 			}
 			result = existing
-			replayed = true
 			return nil
 		}
-		if current.LatestRevisionID == "" {
+		if plan.LatestRevisionID == "" {
 			return domain.InvalidState("plan has no zone revision", map[string]any{
 				"plan_id": planID,
 			})
 		}
-		foundRevision, ok := state.Revisions[current.LatestRevisionID]
+		revision, ok := state.Revisions[plan.LatestRevisionID]
 		if !ok {
 			return domain.NewError(domain.CodeStorageFailure, "plan references a missing revision", map[string]any{
-				"revision_id": current.LatestRevisionID,
+				"revision_id": plan.LatestRevisionID,
 			})
 		}
-		plan = current
-		revision = foundRevision
-		probes = make([]domain.Probe, 0)
+		probes := make([]domain.Probe, 0)
 		for _, probe := range state.Probes {
 			if probe.PlanID == planID {
 				probes = append(probes, probe)
@@ -79,14 +72,8 @@ func (s *Service) Evaluate(
 				"plan_id": planID,
 			})
 		}
-		return nil
-	})
-	if err != nil || replayed {
-		return result, err
-	}
-	result = domain.BuildAssessment(s.ids.New("asm"), plan, revision, probes, now)
-	result.RequestKey = input.RequestKey
-	err = s.store.Write(ctx, func(state *domain.State) error {
+		result = domain.BuildAssessment(s.ids.New("asm"), plan, revision, probes, now)
+		result.RequestKey = input.RequestKey
 		state.Assessments[result.ID] = result
 		state.AssessmentRequestKeys[requestIndex] = result.ID
 		plan.LatestAssessmentID = result.ID

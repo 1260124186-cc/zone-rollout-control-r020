@@ -116,8 +116,9 @@ func (s *Service) Activate(
 	planID string,
 	expectedVersion uint64,
 ) (domain.RolloutPlan, error) {
+	now := s.clock.Now().UTC()
 	var plan domain.RolloutPlan
-	err := s.store.Read(ctx, func(state *domain.State) error {
+	err := s.store.Write(ctx, func(state *domain.State) error {
 		current, ok := state.Plans[planID]
 		if !ok {
 			return domain.NotFound("plan", planID)
@@ -125,21 +126,14 @@ func (s *Service) Activate(
 		if current.Version != expectedVersion {
 			return versionConflict(planID, expectedVersion, current.Version)
 		}
-		plan = current
-		return nil
-	})
-	if err != nil {
-		return plan, err
-	}
-	now := s.clock.Now().UTC()
-	if err := domain.ActivatePlan(&plan, now); err != nil {
-		return plan, err
-	}
-	err = s.store.Write(ctx, func(state *domain.State) error {
-		state.Plans[planID] = plan
+		if err := domain.ActivatePlan(&current, now); err != nil {
+			return err
+		}
+		state.Plans[planID] = current
 		store.AddAudit(state, s.ids, "plan", planID, "activated", now, map[string]any{
-			"version": plan.Version,
+			"version": current.Version,
 		})
+		plan = current
 		return nil
 	})
 	return plan, err
@@ -150,8 +144,9 @@ func (s *Service) Complete(
 	planID string,
 	expectedVersion uint64,
 ) (domain.RolloutPlan, error) {
+	now := s.clock.Now().UTC()
 	var plan domain.RolloutPlan
-	err := s.store.Read(ctx, func(state *domain.State) error {
+	err := s.store.Write(ctx, func(state *domain.State) error {
 		current, ok := state.Plans[planID]
 		if !ok {
 			return domain.NotFound("plan", planID)
@@ -159,21 +154,14 @@ func (s *Service) Complete(
 		if current.Version != expectedVersion {
 			return versionConflict(planID, expectedVersion, current.Version)
 		}
-		plan = current
-		return nil
-	})
-	if err != nil {
-		return plan, err
-	}
-	now := s.clock.Now().UTC()
-	if err := domain.CompletePlan(&plan, now); err != nil {
-		return plan, err
-	}
-	err = s.store.Write(ctx, func(state *domain.State) error {
-		state.Plans[planID] = plan
+		if err := domain.CompletePlan(&current, now); err != nil {
+			return err
+		}
+		state.Plans[planID] = current
 		store.AddAudit(state, s.ids, "plan", planID, "completed", now, map[string]any{
-			"version": plan.Version,
+			"version": current.Version,
 		})
+		plan = current
 		return nil
 	})
 	return plan, err
